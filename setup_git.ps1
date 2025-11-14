@@ -66,7 +66,7 @@ git status --short
 Write-Host ""
 
 # 创建初始提交
-$commitMessage = "初始提交：基于 OpenPose 的校园场景人体姿态估计与行为识别项目"
+$commitMessage = "初始提交：基于 MediaPipe Pose 的校园场景人体姿态估计与行为识别项目"
 Write-Host "正在创建初始提交..." -ForegroundColor Cyan
 Write-Host "提交信息: $commitMessage" -ForegroundColor Gray
 git commit -m $commitMessage

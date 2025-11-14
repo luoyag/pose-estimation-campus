@@ -1,8 +1,10 @@
-# 基于 OpenPose 的校园场景人体姿态估计与行为识别
+# 基于 MediaPipe Pose 的校园场景人体姿态估计与行为识别
 
 ## 项目简介
 
-本项目基于 OpenPose 技术实现校园场景下的人体姿态估计和行为识别系统。能够实时检测和识别多种校园常见行为，如走路、跑步、站立、坐下、举手等。
+本项目基于 MediaPipe Pose 技术实现校园场景下的人体姿态估计和行为识别系统。能够实时检测和识别多种校园常见行为，如走路、跑步、站立、坐下、举手等。
+
+**说明**：本项目使用 MediaPipe Pose 进行人体姿态估计。MediaPipe 是 Google 开发的实时人体姿态估计框架，具有轻量、易集成、跨平台的特点，同时保持良好的检测精度。
 
 ## 功能特性
 
@@ -21,8 +23,8 @@
 
 1. 克隆项目到本地
 ```bash
-git clone <your-repo-url>
-cd <project-directory>
+git clone https://github.com/luoyag/pose-estimation-campus.git
+cd pose-estimation-campus
 ```
 
 2. 安装依赖
@@ -30,7 +32,7 @@ cd <project-directory>
 pip install -r requirements.txt
 ```
 
-3. 下载 OpenPose 模型（如果需要使用 MediaPipe 作为替代，已包含在依赖中）
+3. MediaPipe 会自动下载所需的模型文件（首次运行时会自动下载）
 
 ## 使用方法
 
@@ -90,10 +92,18 @@ behavior = behavior_recognizer.recognize(keypoints)
 
 ## 技术栈
 
-- **姿态估计**: MediaPipe Pose (OpenPose 替代方案)
-- **行为识别**: 基于关键点序列的机器学习分类
+- **姿态估计**: MediaPipe Pose（Google 开发的实时人体姿态估计框架）
+- **行为识别**: 基于关键点序列的机器学习分类（Random Forest）
 - **图像处理**: OpenCV
-- **深度学习**: PyTorch
+- **机器学习**: scikit-learn
+
+### MediaPipe Pose 特性
+
+- **轻量级**: 模型小巧，易于部署
+- **高性能**: 优化的推理速度，支持实时处理
+- **高精度**: 准确的人体姿态关键点检测
+- **易集成**: 简单的 Python API，一键安装
+- **跨平台**: 支持 Windows、Linux、macOS 等多个平台
 
 ## 许可证
 

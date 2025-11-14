@@ -1,21 +1,12 @@
 """
 人体姿态估计模块
-使用 MediaPipe Pose 作为 OpenPose 的替代方案
-如果 MediaPipe 不可用，则使用 OpenCV 的简化版本
+使用 MediaPipe Pose 进行人体姿态估计
 """
 import cv2
 import numpy as np
 from typing import List, Tuple, Optional
 import config
-
-# 尝试导入 MediaPipe，如果失败则使用 OpenCV 版本
-try:
-    import mediapipe as mp
-    MEDIAPIPE_AVAILABLE = True
-except ImportError:
-    MEDIAPIPE_AVAILABLE = False
-    print("警告：MediaPipe 未安装，将使用 OpenCV 简化版本进行姿态估计")
-    print("提示：如果使用 Python 3.11 或 3.12，可以安装 mediapipe 获得更好的效果")
+import mediapipe as mp
 
 
 class PoseEstimator:
@@ -38,20 +29,14 @@ class PoseEstimator:
             min_tracking_confidence or config.MIN_TRACKING_CONFIDENCE
         )
         
-        # 初始化 MediaPipe Pose 或 OpenCV 版本
-        if MEDIAPIPE_AVAILABLE:
-            self.mp_pose = mp.solutions.pose
-            self.pose = self.mp_pose.Pose(
-                min_detection_confidence=self.min_detection_confidence,
-                min_tracking_confidence=self.min_tracking_confidence,
-                model_complexity=1  # 0, 1, 2 (2最准确但最慢)
-            )
-            self.mp_drawing = mp.solutions.drawing_utils
-            self.use_mediapipe = True
-        else:
-            # 使用 OpenCV 简化版本
-            self.use_mediapipe = False
-            self.net = None
+        # 初始化 MediaPipe Pose
+        self.mp_pose = mp.solutions.pose
+        self.pose = self.mp_pose.Pose(
+            min_detection_confidence=self.min_detection_confidence,
+            min_tracking_confidence=self.min_tracking_confidence,
+            model_complexity=1  # 0, 1, 2 (2最准确但最慢)
+        )
+        self.mp_drawing = mp.solutions.drawing_utils
         
     def estimate(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
@@ -64,22 +49,18 @@ class PoseEstimator:
             关键点数组，形状为 (num_keypoints, 3) 或 None
             每行包含 [x, y, confidence]
         """
-        if self.use_mediapipe:
-            # 使用 MediaPipe
-            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            image_rgb.flags.writeable = False
-            
-            # 进行姿态估计
-            results = self.pose.process(image_rgb)
-            
-            # 提取关键点
-            if results.pose_landmarks:
-                keypoints = self._extract_keypoints(results.pose_landmarks, image.shape)
-                return keypoints
-            return None
-        else:
-            # 使用 OpenCV 简化版本
-            return self._estimate_opencv(image)
+        # 转换图像格式
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_rgb.flags.writeable = False
+        
+        # 进行姿态估计
+        results = self.pose.process(image_rgb)
+        
+        # 提取关键点
+        if results.pose_landmarks:
+            keypoints = self._extract_keypoints(results.pose_landmarks, image.shape)
+            return keypoints
+        return None
     
     def _extract_keypoints(self, landmarks, image_shape: Tuple[int, int, int]) -> np.ndarray:
         """
@@ -96,7 +77,7 @@ class PoseEstimator:
         keypoints = []
         
         # MediaPipe Pose 有33个关键点，我们选择18个主要关键点
-        # 对应 OpenPose 的18个关键点
+        # 提取18个主要关键点用于行为识别
         keypoint_indices = [
             0,   # nose
             2,   # left_eye
@@ -154,79 +135,13 @@ class PoseEstimator:
         )
         return annotated_image
     
-    def _estimate_opencv(self, image: np.ndarray) -> Optional[np.ndarray]:
-        """
-        使用 OpenCV 简化方法估计姿态（当 MediaPipe 不可用时）
-        
-        Args:
-            image: 输入图像 (BGR格式)
-            
-        Returns:
-            关键点数组或 None
-        """
-        # 转换为灰度图
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # 使用背景减除或轮廓检测
-        # 这里使用一个简化的方法
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if len(contours) == 0:
-            return None
-        
-        # 找到最大的轮廓
-        largest_contour = max(contours, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(largest_contour)
-        
-        if w < 50 or h < 100:
-            return None
-        
-        # 基于边界框估计关键点
-        return self._estimate_keypoints_from_bbox(x, y, w, h, image.shape)
-    
-    def _estimate_keypoints_from_bbox(self, x, y, w, h, image_shape):
-        """从边界框估计关键点（简化方法）"""
-        height, width = image_shape[:2]
-        keypoints = []
-        
-        center_x = x + w / 2
-        center_y = y + h / 2
-        
-        # 基于人体比例的关键点偏移
-        keypoint_offsets = [
-            (0, -0.4 * h),      # 0: nose
-            (-0.1 * w, -0.35 * h),  # 1: left_eye
-            (0.1 * w, -0.35 * h),   # 2: right_eye
-            (-0.15 * w, -0.3 * h),  # 3: left_ear
-            (0.15 * w, -0.3 * h),   # 4: right_ear
-            (-0.2 * w, -0.1 * h),   # 5: left_shoulder
-            (0.2 * w, -0.1 * h),    # 6: right_shoulder
-            (-0.25 * w, 0.1 * h),   # 7: left_elbow
-            (0.25 * w, 0.1 * h),    # 8: right_elbow
-            (-0.3 * w, 0.3 * h),    # 9: left_wrist
-            (0.3 * w, 0.3 * h),     # 10: right_wrist
-            (-0.15 * w, 0.2 * h),   # 11: left_hip
-            (0.15 * w, 0.2 * h),    # 12: right_hip
-            (-0.15 * w, 0.5 * h),   # 13: left_knee
-            (0.15 * w, 0.5 * h),    # 14: right_knee
-            (-0.15 * w, 0.85 * h),  # 15: left_ankle
-            (0.15 * w, 0.85 * h),   # 16: right_ankle
-        ]
-        
-        for offset_x, offset_y in keypoint_offsets:
-            kp_x = center_x + offset_x
-            kp_y = center_y + offset_y
-            kp_x = max(0, min(width - 1, kp_x))
-            kp_y = max(0, min(height - 1, kp_y))
-            confidence = 0.6  # 简化版本的置信度较低
-            keypoints.append([kp_x, kp_y, confidence])
-        
-        return np.array(keypoints, dtype=np.float32)
-    
     def __del__(self):
         """释放资源"""
-        if hasattr(self, 'pose') and self.use_mediapipe:
-            self.pose.close()
+        if hasattr(self, 'pose') and self.pose is not None:
+            try:
+                self.pose.close()
+            except:
+                # 资源可能已经被释放，忽略错误
+                pass
 
 

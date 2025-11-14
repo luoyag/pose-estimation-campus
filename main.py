@@ -1,10 +1,11 @@
 """
 主程序入口
-基于 OpenPose 的校园场景人体姿态估计与行为识别
+基于 MediaPipe Pose 的校园场景人体姿态估计与行为识别
 """
 import cv2
 import argparse
 import sys
+import time
 from tqdm import tqdm
 from pose_estimation import PoseEstimator
 from behavior_recognition import BehaviorRecognizer
@@ -38,11 +39,15 @@ def process_video(input_path: str,
     print("初始化可视化器...")
     visualizer = Visualizer()
     
-    # 打开视频或摄像头
-    if isinstance(input_path, str) and input_path.isdigit():
-        input_path = int(input_path)
+    # 保存原始输入路径，用于后续判断
+    is_camera = isinstance(input_path, str) and input_path.isdigit()
     
-    cap = cv2.VideoCapture(input_path)
+    # 打开视频或摄像头
+    if is_camera:
+        camera_index = int(input_path)
+        cap = cv2.VideoCapture(camera_index)
+    else:
+        cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
         print(f"错误：无法打开输入源 {input_path}")
         print("\n可能的原因：")
@@ -74,17 +79,30 @@ def process_video(input_path: str,
     
     # 处理帧
     frame_count = 0
+    should_exit = False
+    fps_counter = 0
+    fps_start_time = time.time()
+    current_fps = 0.0
+    
     try:
         # 创建进度条（仅对视频文件）
         if total_frames > 0:
             pbar = tqdm(total=total_frames, desc="处理中")
         else:
             pbar = None
+            # 摄像头模式下，提示如何退出
+            if show_preview:
+                print("\n提示：按 'Q' 或 'ESC' 键退出，或点击窗口关闭按钮")
         
         while True:
             ret, frame = cap.read()
             if not ret:
-                break
+                # 对于摄像头，ret为False可能是暂时的问题，可以尝试继续
+                if is_camera:
+                    continue
+                else:
+                    # 对于视频文件，ret为False表示结束
+                    break
             
             # 姿态估计
             keypoints = pose_estimator.estimate(frame)
@@ -95,16 +113,39 @@ def process_video(input_path: str,
             else:
                 behavior, confidence = "unknown", 0.0
             
-            # 可视化
+            # 计算FPS（每30帧更新一次）
+            fps_counter += 1
+            if fps_counter >= 30:
+                fps_end_time = time.time()
+                current_fps = fps_counter / (fps_end_time - fps_start_time)
+                fps_counter = 0
+                fps_start_time = fps_end_time
+            
+            # 可视化（传递当前FPS）
             annotated_frame = visualizer.draw_all(
-                frame, keypoints, behavior, confidence
+                frame, keypoints, behavior, confidence, 
+                fps=current_fps if current_fps > 0 else None
             )
             
-            # 显示预览
+            # 显示预览和处理按键事件
             if show_preview:
                 cv2.imshow('姿态估计与行为识别', annotated_frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    print("\n用户中断处理")
+                
+                # 检查窗口是否被关闭（cv2.getWindowProperty返回-1表示窗口被关闭）
+                try:
+                    if cv2.getWindowProperty('姿态估计与行为识别', cv2.WND_PROP_VISIBLE) < 1:
+                        print("\n窗口已关闭")
+                        should_exit = True
+                        break
+                except:
+                    # 在某些系统上可能不支持这个属性
+                    pass
+                
+                # 检查按键：Q键、ESC键或窗口关闭
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == ord('Q') or key == 27:  # 27是ESC键
+                    print("\n用户按下退出键（Q/ESC）")
+                    should_exit = True
                     break
             
             # 写入输出视频
@@ -118,27 +159,55 @@ def process_video(input_path: str,
         if pbar:
             pbar.close()
         
-        print(f"\n处理完成！共处理 {frame_count} 帧")
+        if should_exit:
+            print(f"\n用户中断处理，共处理 {frame_count} 帧")
+        else:
+            print(f"\n处理完成！共处理 {frame_count} 帧")
         
     except KeyboardInterrupt:
-        print("\n\n处理被用户中断")
+        print("\n\n处理被用户中断（Ctrl+C）")
+        should_exit = True
     except Exception as e:
         print(f"\n错误：{e}")
         import traceback
         traceback.print_exc()
     finally:
         # 清理资源
-        cap.release()
+        print("\n正在释放资源...")
+        
+        # 释放视频捕获
+        if 'cap' in locals():
+            cap.release()
+        
+        # 释放视频写入器
         if writer:
             writer.release()
+        
+        # 关闭所有OpenCV窗口
         cv2.destroyAllWindows()
+        
+        # 尝试关闭所有窗口（多次调用确保关闭）
+        for _ in range(3):
+            cv2.waitKey(1)
+        
+        # 释放姿态估计器资源
+        if 'pose_estimator' in locals():
+            if hasattr(pose_estimator, 'pose'):
+                try:
+                    if pose_estimator.pose is not None:
+                        pose_estimator.pose.close()
+                        pose_estimator.pose = None
+                except:
+                    # 资源可能已经被释放，忽略错误
+                    pass
+        
         print("资源已释放")
 
 
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description='基于 OpenPose 的校园场景人体姿态估计与行为识别'
+        description='基于 MediaPipe Pose 的校园场景人体姿态估计与行为识别'
     )
     parser.add_argument(
         '--input', '-i',
@@ -167,7 +236,7 @@ def main():
     args = parser.parse_args()
     
     print("=" * 60)
-    print("基于 OpenPose 的校园场景人体姿态估计与行为识别")
+    print("基于 MediaPipe Pose 的校园场景人体姿态估计与行为识别")
     print("=" * 60)
     print()
     

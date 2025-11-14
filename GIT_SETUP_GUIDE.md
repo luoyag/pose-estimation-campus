@@ -51,7 +51,7 @@ git status
 ### 3. 创建初始提交
 
 ```powershell
-git commit -m "初始提交：基于 OpenPose 的校园场景人体姿态估计与行为识别项目"
+git commit -m "初始提交：基于 MediaPipe Pose 的校园场景人体姿态估计与行为识别项目"
 ```
 
 ## 第三步：连接到远程仓库（可选）
@@ -148,7 +148,7 @@ git init
 git add .
 
 # 创建初始提交
-git commit -m "初始提交：基于 OpenPose 的校园场景人体姿态估计与行为识别项目"
+git commit -m "初始提交：基于 MediaPipe Pose 的校园场景人体姿态估计与行为识别项目"
 
 echo "Git 仓库初始化完成！"
 echo "下一步：连接到远程仓库（可选）"

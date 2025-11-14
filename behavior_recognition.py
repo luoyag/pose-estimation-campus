@@ -4,7 +4,7 @@
 """
 import numpy as np
 from typing import List, Optional, Tuple
-from collections import deque
+from collections import deque, Counter
 import config
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
@@ -31,6 +31,10 @@ class BehaviorRecognizer:
         self.model = None
         self.scaler = StandardScaler()
         self.is_trained = False
+        
+        # 时间序列平滑（减少识别抖动）
+        self.behavior_history = deque(maxlen=10)  # 存储最近10帧的识别结果
+        self.confidence_history = deque(maxlen=10)  # 存储最近10帧的置信度
         
         # 加载预训练模型（如果存在）
         if model_path and os.path.exists(model_path):
@@ -246,13 +250,13 @@ class BehaviorRecognizer:
     
     def recognize(self, keypoints: Optional[np.ndarray]) -> Tuple[str, float]:
         """
-        识别行为
+        识别行为（带时间序列平滑）
         
         Args:
             keypoints: 当前帧的关键点
             
         Returns:
-            (行为类别, 置信度)
+            (行为类别, 置信度) - 经过时间序列平滑的结果
         """
         if keypoints is None:
             return "unknown", 0.0
@@ -264,12 +268,12 @@ class BehaviorRecognizer:
         self.keypoint_sequence.append(features)
         self.raw_keypoint_sequence.append(keypoints.copy() if keypoints is not None else None)
         
-        # 如果序列未满，使用简单规则判断
+        # 当前帧识别结果
         if len(self.keypoint_sequence) < self.sequence_length:
-            return self._rule_based_recognition(keypoints)
-        
-        # 使用模型识别
-        if self.is_trained:
+            # 如果序列未满，使用简单规则判断
+            behavior, confidence = self._rule_based_recognition(keypoints)
+        elif self.is_trained:
+            # 使用模型识别
             sequence_features = np.array(self.keypoint_sequence).flatten()
             sequence_features = sequence_features.reshape(1, -1)
             sequence_features = self.scaler.transform(sequence_features)
@@ -279,73 +283,138 @@ class BehaviorRecognizer:
             confidence = np.max(probability)
             
             if confidence < config.BEHAVIOR_CONFIDENCE_THRESHOLD:
-                return self._rule_based_recognition(keypoints)
-            
-            return prediction, confidence
+                behavior, confidence = self._rule_based_recognition(keypoints)
+            else:
+                behavior = prediction
         else:
             # 如果模型未训练，使用规则识别
-            return self._rule_based_recognition(keypoints)
+            behavior, confidence = self._rule_based_recognition(keypoints)
+        
+        # 添加到历史记录
+        self.behavior_history.append(behavior)
+        self.confidence_history.append(confidence)
+        
+        # 时间序列平滑：使用最近N帧的众数和平均置信度
+        if len(self.behavior_history) >= 3:
+            # 使用众数（出现次数最多的行为）作为最终结果
+            behavior_counts = Counter(self.behavior_history)
+            most_common_behavior, count = behavior_counts.most_common(1)[0]
+            
+            # 只有当众数出现次数超过一半时才使用，否则使用当前帧结果
+            if count >= len(self.behavior_history) / 2:
+                smoothed_behavior = most_common_behavior
+                # 计算该行为的平均置信度
+                smoothed_confidence = np.mean([
+                    conf for beh, conf in zip(self.behavior_history, self.confidence_history)
+                    if beh == smoothed_behavior
+                ])
+            else:
+                # 如果不够一致，使用当前帧结果
+                smoothed_behavior = behavior
+                smoothed_confidence = confidence
+        else:
+            # 历史记录不足，直接使用当前帧结果
+            smoothed_behavior = behavior
+            smoothed_confidence = confidence
+        
+        return smoothed_behavior, smoothed_confidence
     
     def _rule_based_recognition(self, keypoints: np.ndarray) -> Tuple[str, float]:
         """
         基于规则的简单行为识别（用于模型未训练时）
+        置信度根据关键点检测质量和匹配程度动态计算
         
         Args:
             keypoints: 关键点数组
             
         Returns:
-            (行为类别, 置信度)
+            (行为类别, 置信度) - 置信度会根据检测质量动态变化
         """
         if keypoints is None or len(keypoints) < 17:
             return "unknown", 0.0
         
-        # 检查关键点置信度
+        # 计算整体关键点置信度（用于调整最终置信度）
         valid_keypoints = keypoints[keypoints[:, 2] > 0.5]
-        if len(valid_keypoints) < 10:
-            return "unknown", 0.3
+        valid_count = len(valid_keypoints)
+        total_count = len(keypoints)
+        avg_confidence = np.mean(keypoints[:, 2]) if total_count > 0 else 0.0
+        
+        if valid_count < 10:
+            return "unknown", 0.3 * avg_confidence
+        
+        # 置信度调整因子：基于关键点质量
+        confidence_factor = min(1.0, avg_confidence * (valid_count / total_count))
         
         # 判断是否坐下（髋部高度接近膝盖高度）
         if (keypoints[11][2] > 0.5 and keypoints[12][2] > 0.5 and
             keypoints[13][2] > 0.5 and keypoints[14][2] > 0.5):
             hip_y = (keypoints[11][1] + keypoints[12][1]) / 2
             knee_y = (keypoints[13][1] + keypoints[14][1]) / 2
-            if abs(hip_y - knee_y) < 50:  # 阈值可调
-                return "sitting", 0.7
+            hip_knee_diff = abs(hip_y - knee_y)
+            
+            # 动态计算置信度：距离越小，置信度越高
+            if hip_knee_diff < 50:
+                # 归一化到0.6-0.95之间
+                sitting_confidence = 0.95 - (hip_knee_diff / 50) * 0.35
+                return "sitting", sitting_confidence * confidence_factor
         
         # 判断是否举手（手腕高于肩膀）
         if (keypoints[5][2] > 0.5 and keypoints[6][2] > 0.5 and
             keypoints[9][2] > 0.5 and keypoints[10][2] > 0.5):
             shoulder_y = (keypoints[5][1] + keypoints[6][1]) / 2
             wrist_y = min(keypoints[9][1], keypoints[10][1])
-            if wrist_y < shoulder_y - 50:  # 手腕明显高于肩膀
-                return "raising_hand", 0.7
+            hand_height_diff = shoulder_y - wrist_y  # 正值表示手腕高于肩膀
+            
+            if hand_height_diff > 30:  # 手腕明显高于肩膀
+                # 动态计算置信度：高度差越大，置信度越高
+                # 限制最大高度差为150像素
+                normalized_diff = min(hand_height_diff / 150.0, 1.0)
+                raising_confidence = 0.65 + normalized_diff * 0.3  # 0.65-0.95
+                return "raising_hand", raising_confidence * confidence_factor
         
         # 判断是否跑步或走路（通过脚踝位置变化判断）
         if len(self.raw_keypoint_sequence) >= 5:
             recent_ankle_y = []
+            recent_confidences = []
+            
             for kp_seq in list(self.raw_keypoint_sequence)[-5:]:
                 if kp_seq is not None and len(kp_seq) >= 17:
-                    # 提取左右脚踝的y坐标平均值
+                    # 提取左右脚踝的y坐标平均值和置信度
                     left_ankle_y = kp_seq[15][1] if kp_seq[15][2] > 0.5 else None
                     right_ankle_y = kp_seq[16][1] if kp_seq[16][2] > 0.5 else None
+                    left_conf = kp_seq[15][2] if kp_seq[15][2] > 0.5 else 0
+                    right_conf = kp_seq[16][2] if kp_seq[16][2] > 0.5 else 0
                     
                     if left_ankle_y is not None and right_ankle_y is not None:
                         avg_ankle_y = (left_ankle_y + right_ankle_y) / 2
+                        avg_conf = (left_conf + right_conf) / 2
                         recent_ankle_y.append(avg_ankle_y)
+                        recent_confidences.append(avg_conf)
                     elif left_ankle_y is not None:
                         recent_ankle_y.append(left_ankle_y)
+                        recent_confidences.append(left_conf)
                     elif right_ankle_y is not None:
                         recent_ankle_y.append(right_ankle_y)
+                        recent_confidences.append(right_conf)
             
             if len(recent_ankle_y) >= 3:
                 ankle_variance = np.var(recent_ankle_y)
+                avg_ankle_conf = np.mean(recent_confidences) if recent_confidences else 1.0
+                
+                # 动态计算置信度
                 if ankle_variance > 100:  # 脚踝位置变化大，可能是跑步
-                    return "running", 0.6
+                    # 根据方差动态调整置信度
+                    normalized_var = min((ankle_variance - 100) / 200.0, 1.0)  # 归一化到0-1
+                    running_confidence = 0.6 + normalized_var * 0.3  # 0.6-0.9
+                    return "running", running_confidence * avg_ankle_conf * confidence_factor
                 elif 30 < ankle_variance <= 100:  # 脚踝位置变化中等，可能是走路
-                    return "walking", 0.6
+                    normalized_var = (ankle_variance - 30) / 70.0  # 归一化到0-1
+                    walking_confidence = 0.55 + normalized_var * 0.25  # 0.55-0.8
+                    return "walking", walking_confidence * avg_ankle_conf * confidence_factor
         
-        # 默认站立
-        return "standing", 0.5
+        # 默认站立 - 根据关键点质量动态计算置信度
+        standing_confidence = 0.45 + (avg_confidence * 0.3)  # 0.45-0.75
+        return "standing", standing_confidence * confidence_factor
     
     def train(self, X: np.ndarray, y: np.ndarray):
         """

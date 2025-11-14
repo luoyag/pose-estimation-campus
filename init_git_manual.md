@@ -38,7 +38,7 @@ git add .
 git status
 
 # 创建初始提交
-git commit -m "初始提交：基于 OpenPose 的校园场景人体姿态估计与行为识别项目"
+git commit -m "初始提交：基于 MediaPipe Pose 的校园场景人体姿态估计与行为识别项目"
 ```
 
 ## 方法 3：刷新环境变量
@@ -73,7 +73,7 @@ git --version
    ```powershell
    git init
    git add .
-   git commit -m "初始提交：基于 OpenPose 的校园场景人体姿态估计与行为识别项目"
+   git commit -m "初始提交：基于 MediaPipe Pose 的校园场景人体姿态估计与行为识别项目"
    ```
 
 ## 检查 Git 安装位置
